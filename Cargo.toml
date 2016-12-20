@@ -1,0 +1,8 @@
+[package]
+name = "nslookup"
+version = "0.1.0"
+authors = ["Shawn Baker <sjbaker47@gmailcom>"]
+
+[dependencies]
+rand = "0.3"
+byteorder = "0.5"
