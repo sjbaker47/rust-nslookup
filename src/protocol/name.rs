@@ -1,4 +1,38 @@
 use std::str;
+use std::io::{Cursor};
+use byteorder::{NetworkEndian, ReadBytesExt};
+
+#[derive(Debug)]
+pub enum NameRef {
+    //A decoded name with an offset from the UDP packet's data payload
+    Name(String, u16),
+    //A reference to somewhere else in the payload, in bytes
+    Offset(u16),
+}
+
+impl NameRef {
+    pub fn parse(buf: &[u8], absolute_offset: u16) -> NameRef {
+        if (buf[0] & 0xc0) == 0xc0 {
+            let mut cur = Cursor::new(buf);
+            let offset = cur.read_u16::<NetworkEndian>().unwrap() & !(0xc000u16);
+            NameRef::Offset(offset)
+        }
+        else {
+            NameRef::Name(decode_name(buf), absolute_offset)
+        }
+    }
+
+    pub fn encoded_length(&self) -> usize {
+        match *self {
+            //Length includes: starting length octet,
+            //labels with 1-byte lengths (turn into .)
+            //and 1-byte null terminator
+            NameRef::Name(ref x, _) => x.len() + 2,
+            //Offsets are 16-bit values with the highest two bits set
+            NameRef::Offset(_) => 2
+        }
+    }
+}
 
 //Domain names are sent with "length" separators and are null-terminated
 //The domain 'microsoft.com' becomes "0x09microsoft0x03com0x00"

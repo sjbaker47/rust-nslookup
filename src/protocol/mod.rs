@@ -5,6 +5,8 @@ use std::io::{Read, Write, Cursor, Seek, SeekFrom};
 use std::net::UdpSocket;
 use std::net::ToSocketAddrs;
 
+use self::name::NameRef;
+
 use rand;
 
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
@@ -33,12 +35,6 @@ struct DnsHeader {
 }
 
 #[derive(Debug)]
-struct DnsQueston {
-    qtype: u16,
-    qclass: u16,
-}
-
-#[derive(Debug)]
 struct QueryQuestion {
     name: String,
     qtype: u16,
@@ -53,13 +49,6 @@ struct ResponseQuestion {
 }
 
 #[derive(Debug)]
-enum NameRef {
-    Offset(u16),
-    Name(String)
-}
-
-
-#[derive(Debug)]
 struct ResourceRecord {
     name: NameRef,
     rr_type: u16,
@@ -67,34 +56,6 @@ struct ResourceRecord {
     ttl: u32,
     length: u16,
     data: u32,
-}
-
-impl NameRef {
-    fn parse(buf: &[u8]) -> NameRef {
-        if (buf[0] & 0xc0) == 0xc0 {
-            NameRef::Offset(0)
-        }
-        else {
-            NameRef::Name(name::decode_name(buf))
-        }
-    }
-
-    fn encode(&self) -> Vec<u8> {
-        match *self {
-            NameRef::Name(ref x) => name::encode_name(x),
-            NameRef::Offset(_) => panic!("Can't decode resource pointer yet!"),
-        }
-    }
-
-    fn encoded_length(&self) -> usize {
-        match *self {
-            //Length includes: starting length octet,
-            //labels with 1-byte lengths (turn into .)
-            //and 1-byte null terminator
-            NameRef::Name(ref x) => x.len() + 2,
-            NameRef::Offset(_) => 2
-        }
-    }
 }
 
 impl DnsQuery {
@@ -152,9 +113,10 @@ impl DnsQuery {
             additional_rr_count: rdr.read_u16::<NetworkEndian>().unwrap(),
         };
         println!("Decoded {:?}", header);
+
         let position = rdr.position() as usize;
         let qnamebuf = &buf[position..];
-        let name = NameRef::parse(qnamebuf);
+        let name = NameRef::parse(qnamebuf, position as u16);
         rdr.seek(SeekFrom::Current(name.encoded_length() as i64)).unwrap();
         let question = ResponseQuestion {
             name: name,
@@ -165,7 +127,7 @@ impl DnsQuery {
 
         let position = rdr.position() as usize;
         let rnamebuf = &buf[position..];
-        let name = NameRef::parse(rnamebuf);
+        let name = NameRef::parse(rnamebuf, position as u16);
         rdr.seek(SeekFrom::Current(name.encoded_length() as i64)).unwrap();
         let record = ResourceRecord {
             name: name,
