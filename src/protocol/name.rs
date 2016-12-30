@@ -1,5 +1,5 @@
 use std::str;
-use std::io::{Cursor};
+use std::io::{Read, BufRead, Seek, SeekFrom, Error, ErrorKind, Result};
 use byteorder::{NetworkEndian, ReadBytesExt};
 
 #[derive(Debug)]
@@ -11,14 +11,18 @@ pub enum NameRef {
 }
 
 impl NameRef {
-    pub fn parse(buf: &[u8], absolute_offset: u16) -> NameRef {
-        if (buf[0] & 0xc0) == 0xc0 {
-            let mut cur = Cursor::new(buf);
-            let offset = cur.read_u16::<NetworkEndian>().unwrap() & !(0xc000u16);
-            NameRef::Offset(offset)
+    pub fn parse_reader<R : Read + Seek + BufRead>(reader : &mut R, position: u16) -> Result<NameRef> {
+        let flag = reader.read_u16::<NetworkEndian>()?;
+        let offset_flag = 0xc000u16;
+        if (flag & offset_flag) == offset_flag {
+            let offset_reference = flag & !(offset_flag);
+            Ok(NameRef::Offset(offset_reference))
         }
         else {
-            NameRef::Name(decode_name(buf), absolute_offset)
+            //Undo the two bytes we've read -- they're a part of the domain name!
+            reader.seek(SeekFrom::Current(-2))?;
+            let name = NameRef::Name(decode_name_rdr(reader)?, position);
+            Ok(name)
         }
     }
 
@@ -53,21 +57,38 @@ pub fn encode_name(name : &str) -> Vec<u8> {
     buffer
 }
 
-pub fn decode_name(buf: &[u8]) -> String {
-    let mut name = String::new();
-    let mut i = 0;
-    while buf[i] != 0 {
-        if i != 0 {
-            name.push('.');
-        }
-        let nbytes = buf[i] as usize;
-        i += 1;
-        let slice = &buf[i..i+nbytes].to_vec();
-        i += nbytes;
-        let part = str::from_utf8(slice).unwrap();
-        name += part;
+pub fn decode_name_rdr<R : BufRead>(rdr: &mut R) -> Result<String> {
+    let mut buffer: Vec<u8> = Vec::new();
+    let total = rdr.read_until(0, &mut buffer)?;
+    if total == 0 || buffer[total-1] != 0 {
+        return Err(Error::new(ErrorKind::InvalidData, "Domain name appears blank or mangled"));
     }
-    name
+
+    let mut name = String::new();
+    let mut nbytes = 0;
+    for byte in buffer {
+        //Null byte means we've hit the last label
+        if byte == 0 { 
+            break; 
+        }
+
+        //If nbytes is zero, we're either staritng out or hit the end of the label
+        if nbytes == 0 {
+            //Interpret this byte as the length of the next label (e.g. google, com)
+            nbytes = byte;
+            //Replace length bytes with '.' as long as we're not at the first label
+            if !name.is_empty() {
+                name.push('.');
+            }
+        }
+        //Positive nbytes mean we're still reading a label
+        else {
+            //Intepret the byte as an ASCII char
+            name.push(byte as char);
+            nbytes -= 1;
+        }
+    }
+    Ok(name)
 }
 
 #[test]
@@ -88,5 +109,18 @@ fn decode_name_decodes() {
     let domain_with_sub = "site.example.com";
     let buf = encode_name(domain_with_sub);
     let decoded = decode_name(&buf);
+    assert_eq!(domain_with_sub, decoded);
+}
+
+#[test]
+fn decode_name_rdr_decodes() {
+    let simple_domain = "example.com";
+    let buf = encode_name(simple_domain);
+    let decoded = decode_name_rdr(&mut Cursor::new(&buf)).unwrap();
+    assert_eq!(simple_domain, decoded);
+
+    let domain_with_sub = "site.example.com";
+    let buf = encode_name(domain_with_sub);
+    let decoded = decode_name_rdr(&mut Cursor::new(&buf)).unwrap();
     assert_eq!(domain_with_sub, decoded);
 }

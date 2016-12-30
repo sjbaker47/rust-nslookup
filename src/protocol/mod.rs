@@ -1,7 +1,7 @@
 mod name;
 
 use std::str;
-use std::io::{Read, Write, Cursor, Seek, SeekFrom};
+use std::io::{Read, BufRead, Write, Cursor, Seek, SeekFrom, Result};
 use std::net::UdpSocket;
 use std::net::ToSocketAddrs;
 
@@ -63,6 +63,7 @@ impl DnsQuery {
         DnsQuery { 
             header: DnsHeader {
                 transaction_id: rand::random::<u16>(),
+                //Set the recursive bit
                 flags: 0x0100,
                 question_rr_count: 1,
                 answer_rr_count: 0,
@@ -88,47 +89,22 @@ impl DnsQuery {
     fn encode_packet(&self) -> Vec<u8> {
         println!("Encoding packet: {:?}", self);
         let mut buffer = vec![];
-        buffer.write_u16::<NetworkEndian>(self.header.transaction_id).unwrap();
-        buffer.write_u16::<NetworkEndian>(self.header.flags).unwrap();
-        buffer.write_u16::<NetworkEndian>(self.header.question_rr_count).unwrap();
-        buffer.write_u16::<NetworkEndian>(self.header.answer_rr_count).unwrap();
-        buffer.write_u16::<NetworkEndian>(self.header.authority_rr_count).unwrap();
-        buffer.write_u16::<NetworkEndian>(self.header.additional_rr_count).unwrap();
-
-        let encoded_name = name::encode_name(&self.question.name);
-        buffer.write_all(&encoded_name).unwrap();
-        buffer.write_u16::<NetworkEndian>(self.question.qtype).unwrap();
-        buffer.write_u16::<NetworkEndian>(self.question.qclass).unwrap();
+        self.header.encode(&mut buffer).unwrap();
+        self.question.encode(&mut buffer).unwrap();
         buffer
     }
 
     fn decode_packet(buf: &[u8]) {
         let mut rdr = Cursor::new(&buf);
-        let header = DnsHeader {
-            transaction_id: rdr.read_u16::<NetworkEndian>().unwrap(),
-            flags: rdr.read_u16::<NetworkEndian>().unwrap(),
-            question_rr_count: rdr.read_u16::<NetworkEndian>().unwrap(),
-            answer_rr_count: rdr.read_u16::<NetworkEndian>().unwrap(),
-            authority_rr_count: rdr.read_u16::<NetworkEndian>().unwrap(),
-            additional_rr_count: rdr.read_u16::<NetworkEndian>().unwrap(),
-        };
+        let header = DnsHeader::parse(&mut rdr).unwrap();
         println!("Decoded {:?}", header);
 
-        let position = rdr.position() as usize;
-        let qnamebuf = &buf[position..];
-        let name = NameRef::parse(qnamebuf, position as u16);
-        rdr.seek(SeekFrom::Current(name.encoded_length() as i64)).unwrap();
-        let question = ResponseQuestion {
-            name: name,
-            qtype: rdr.read_u16::<NetworkEndian>().unwrap(),
-            qclass: rdr.read_u16::<NetworkEndian>().unwrap(),
-        };
+        let position = rdr.position();
+        let question = ResponseQuestion::parse(&mut rdr, position as u16).unwrap();
         println!("Decoded {:?}", question);
 
-        let position = rdr.position() as usize;
-        let rnamebuf = &buf[position..];
-        let name = NameRef::parse(rnamebuf, position as u16);
-        rdr.seek(SeekFrom::Current(name.encoded_length() as i64)).unwrap();
+        let position = rdr.position();
+        let name = NameRef::parse_reader(&mut rdr, position as u16).unwrap();
         let record = ResourceRecord {
             name: name,
             rr_type: rdr.read_u16::<NetworkEndian>().unwrap(),
@@ -146,5 +122,50 @@ impl DnsQuery {
         assert_eq!(record.length, 4);
         println!("Decoded {:?}", record);
         println!("{}.{}.{}.{}", a, b, c, d);
+    }
+}
+
+impl DnsHeader {
+    fn parse<R : Read>(rdr: &mut R) -> Result<DnsHeader> {
+        Ok(DnsHeader {
+            transaction_id: rdr.read_u16::<NetworkEndian>()?,
+            flags: rdr.read_u16::<NetworkEndian>()?,
+            question_rr_count: rdr.read_u16::<NetworkEndian>()?,
+            answer_rr_count: rdr.read_u16::<NetworkEndian>()?,
+            authority_rr_count: rdr.read_u16::<NetworkEndian>()?,
+            additional_rr_count: rdr.read_u16::<NetworkEndian>()?,
+        })
+    }
+
+    fn encode(&self, buffer : &mut Vec<u8>) -> Result<()> {
+        buffer.write_u16::<NetworkEndian>(self.transaction_id)?;
+        buffer.write_u16::<NetworkEndian>(self.flags)?;
+        buffer.write_u16::<NetworkEndian>(self.question_rr_count)?;
+        buffer.write_u16::<NetworkEndian>(self.answer_rr_count)?;
+        buffer.write_u16::<NetworkEndian>(self.authority_rr_count)?;
+        buffer.write_u16::<NetworkEndian>(self.additional_rr_count)?;
+        Ok(())
+    }
+}
+
+impl QueryQuestion {
+    fn encode(&self, buffer : &mut Vec<u8>) -> Result<()> {
+        let encoded_name = name::encode_name(&self.name);
+        buffer.write_all(&encoded_name)?;
+        buffer.write_u16::<NetworkEndian>(self.qtype)?;
+        buffer.write_u16::<NetworkEndian>(self.qclass)?;
+        Ok(())
+    }
+}
+
+impl ResponseQuestion {
+    fn parse<R : Read + Seek + BufRead>(rdr: &mut R, position : u16) -> Result<ResponseQuestion> {
+        let name = NameRef::parse_reader(rdr, position)?;
+        let question = ResponseQuestion {
+            name: name,
+            qtype: rdr.read_u16::<NetworkEndian>()?,
+            qclass: rdr.read_u16::<NetworkEndian>()?,
+        };
+        Ok(question)
     }
 }
