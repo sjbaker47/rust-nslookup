@@ -25,17 +25,6 @@ impl NameRef {
             Ok(name)
         }
     }
-
-    pub fn encoded_length(&self) -> usize {
-        match *self {
-            //Length includes: starting length octet,
-            //labels with 1-byte lengths (turn into .)
-            //and 1-byte null terminator
-            NameRef::Name(ref x, _) => x.len() + 2,
-            //Offsets are 16-bit values with the highest two bits set
-            NameRef::Offset(_) => 2
-        }
-    }
 }
 
 //Domain names are sent with "length" separators and are null-terminated

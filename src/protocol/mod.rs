@@ -2,8 +2,7 @@ mod name;
 
 use std::str;
 use std::io::{Read, BufRead, Write, Cursor, Seek, SeekFrom, Result};
-use std::net::UdpSocket;
-use std::net::ToSocketAddrs;
+use std::net::{Ipv4Addr, UdpSocket, ToSocketAddrs};
 
 use self::name::NameRef;
 
@@ -83,7 +82,7 @@ impl DnsQuery {
         socket.send_to(&packet, addr).unwrap();
         let mut recvbuf = [0; 512];
         let (nbytes, raddr) = socket.recv_from(&mut recvbuf[..]).unwrap();
-        DnsQuery::decode_packet(&recvbuf[..nbytes]);
+        let packet = DnsQuery::decode_packet(&recvbuf[..nbytes]).unwrap();
     }
 
     fn encode_packet(&self) -> Vec<u8> {
@@ -94,34 +93,27 @@ impl DnsQuery {
         buffer
     }
 
-    fn decode_packet(buf: &[u8]) {
+    fn decode_packet(buf: &[u8]) -> Result<DnsResponse> {
         let mut rdr = Cursor::new(&buf);
-        let header = DnsHeader::parse(&mut rdr).unwrap();
+        let header = DnsHeader::parse(&mut rdr)?;
         println!("Decoded {:?}", header);
 
         let position = rdr.position();
-        let question = ResponseQuestion::parse(&mut rdr, position as u16).unwrap();
+        let question = ResponseQuestion::parse(&mut rdr, position as u16)?;
         println!("Decoded {:?}", question);
 
         let position = rdr.position();
-        let name = NameRef::parse_reader(&mut rdr, position as u16).unwrap();
-        let record = ResourceRecord {
-            name: name,
-            rr_type: rdr.read_u16::<NetworkEndian>().unwrap(),
-            rr_class: rdr.read_u16::<NetworkEndian>().unwrap(),
-            ttl: rdr.read_u32::<NetworkEndian>().unwrap(),
-            length: rdr.read_u16::<NetworkEndian>().unwrap(),
-            data: rdr.read_u32::<NetworkEndian>().unwrap(),
-        };
-        rdr.seek(SeekFrom::Current(-4)).unwrap();
-        let (a, b, c, d) = (
-            rdr.read_u8().unwrap(),
-            rdr.read_u8().unwrap(),
-            rdr.read_u8().unwrap(),
-            rdr.read_u8().unwrap());
-        assert_eq!(record.length, 4);
+        let record = ResourceRecord::parse(&mut rdr, position as u16)?;
         println!("Decoded {:?}", record);
-        println!("{}.{}.{}.{}", a, b, c, d);
+
+        let ip = Ipv4Addr::from(record.data);
+        println!("{}", ip);
+
+        Ok(DnsResponse {
+            header: header,
+            question: question,
+            record: record
+        })
     }
 }
 
@@ -169,3 +161,18 @@ impl ResponseQuestion {
         Ok(question)
     }
 }
+
+impl ResourceRecord {
+    fn parse<R : Read + Seek + BufRead>(rdr: &mut R, position : u16) -> Result<ResourceRecord> {
+        let name = NameRef::parse_reader(rdr, position)?;
+        Ok(ResourceRecord {
+            name: name,
+            rr_type: rdr.read_u16::<NetworkEndian>()?,
+            rr_class: rdr.read_u16::<NetworkEndian>()?,
+            ttl: rdr.read_u32::<NetworkEndian>()?,
+            length: rdr.read_u16::<NetworkEndian>()?,
+            data: rdr.read_u32::<NetworkEndian>()?,
+        })
+    }
+}
+
