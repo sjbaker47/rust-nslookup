@@ -1,14 +1,12 @@
 mod name;
 
 use std::str;
-use std::io::{Read, BufRead, Write, Cursor, Seek, SeekFrom, Result};
-use std::net::{Ipv4Addr, UdpSocket, ToSocketAddrs};
-
-use self::name::NameRef;
-
+use std::fmt;
+use std::io::{Read, BufRead, Write, Cursor, Seek, Result};
+use std::net::{Ipv4Addr, Ipv6Addr, UdpSocket, ToSocketAddrs};
 use rand;
-
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
+use self::name::NameRef;
 
 #[derive(Debug)]
 pub struct DnsQuery {
@@ -17,10 +15,10 @@ pub struct DnsQuery {
 }
 
 #[derive(Debug)]
-struct DnsResponse {
+pub struct DnsResponse {
     header: DnsHeader,
     question: ResponseQuestion,
-    record: ResourceRecord,
+    record: Record,
 }
 
 #[derive(Debug)]
@@ -48,13 +46,25 @@ struct ResponseQuestion {
 }
 
 #[derive(Debug)]
-struct ResourceRecord {
+struct Record {
+    header: RecordHeader,
+    payload: RecordPayload,
+}
+
+#[derive(Debug)]
+struct RecordHeader {
     name: NameRef,
     rr_type: u16,
     rr_class: u16,
     ttl: u32,
     length: u16,
-    data: u32,
+}
+
+#[derive(Debug)]
+enum RecordPayload {
+    A(Ipv4Addr),
+    AAAA(Ipv6Addr),
+    Other(Vec<u8>),
 }
 
 impl DnsQuery {
@@ -71,7 +81,7 @@ impl DnsQuery {
             },
             question: QueryQuestion {
                 name: domain,
-                qtype: 1,
+                qtype: 28,
                 qclass: 1,
             },
         }
@@ -80,9 +90,6 @@ impl DnsQuery {
     pub fn send_to<A : ToSocketAddrs>(&self, socket : &UdpSocket, addr : A) {
         let packet = self.encode_packet();
         socket.send_to(&packet, addr).unwrap();
-        let mut recvbuf = [0; 512];
-        let (nbytes, raddr) = socket.recv_from(&mut recvbuf[..]).unwrap();
-        let packet = DnsQuery::decode_packet(&recvbuf[..nbytes]).unwrap();
     }
 
     fn encode_packet(&self) -> Vec<u8> {
@@ -90,30 +97,8 @@ impl DnsQuery {
         let mut buffer = vec![];
         self.header.encode(&mut buffer).unwrap();
         self.question.encode(&mut buffer).unwrap();
+        buffer.shrink_to_fit();
         buffer
-    }
-
-    fn decode_packet(buf: &[u8]) -> Result<DnsResponse> {
-        let mut rdr = Cursor::new(&buf);
-        let header = DnsHeader::parse(&mut rdr)?;
-        println!("Decoded {:?}", header);
-
-        let position = rdr.position();
-        let question = ResponseQuestion::parse(&mut rdr, position as u16)?;
-        println!("Decoded {:?}", question);
-
-        let position = rdr.position();
-        let record = ResourceRecord::parse(&mut rdr, position as u16)?;
-        println!("Decoded {:?}", record);
-
-        let ip = Ipv4Addr::from(record.data);
-        println!("{}", ip);
-
-        Ok(DnsResponse {
-            header: header,
-            question: question,
-            record: record
-        })
     }
 }
 
@@ -150,6 +135,34 @@ impl QueryQuestion {
     }
 }
 
+impl DnsResponse {
+    pub fn recv_from(socket: &UdpSocket) -> Result<DnsResponse> {
+        let mut recvbuf = [0; 512];
+        let (nbytes, _) = socket.recv_from(&mut recvbuf[..])?;
+        DnsResponse::decode_packet(&recvbuf[..nbytes])
+    }
+
+    fn decode_packet(buf: &[u8]) -> Result<DnsResponse> {
+        let mut rdr = Cursor::new(&buf);
+        let header = DnsHeader::parse(&mut rdr)?;
+        println!("Decoded {:?}", header);
+
+        let position = rdr.position();
+        let question = ResponseQuestion::parse(&mut rdr, position as u16)?;
+        println!("Decoded {:?}", question);
+
+        let position = rdr.position();
+        let record = Record::parse(&mut rdr, position as u16)?;
+        println!("Decoded {:?}", record);
+
+        Ok(DnsResponse {
+            header: header,
+            question: question,
+            record: record
+        })
+    }
+}
+
 impl ResponseQuestion {
     fn parse<R : Read + Seek + BufRead>(rdr: &mut R, position : u16) -> Result<ResponseQuestion> {
         let name = NameRef::parse_reader(rdr, position)?;
@@ -162,16 +175,44 @@ impl ResponseQuestion {
     }
 }
 
-impl ResourceRecord {
-    fn parse<R : Read + Seek + BufRead>(rdr: &mut R, position : u16) -> Result<ResourceRecord> {
-        let name = NameRef::parse_reader(rdr, position)?;
-        Ok(ResourceRecord {
-            name: name,
+impl fmt::Display for Record {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.payload {
+            RecordPayload::A(addr) => addr.fmt(f),
+            RecordPayload::AAAA(addr) => addr.fmt(f),
+            RecordPayload::Other(_) => panic!("Huh?"),
+        }
+    }
+}
+
+impl Record {
+    fn parse<R : Read + Seek + BufRead>(rdr: &mut R, position : u16) -> Result<Record> {
+        let header = RecordHeader {
+            name: NameRef::parse_reader(rdr, position)?,
             rr_type: rdr.read_u16::<NetworkEndian>()?,
             rr_class: rdr.read_u16::<NetworkEndian>()?,
             ttl: rdr.read_u32::<NetworkEndian>()?,
             length: rdr.read_u16::<NetworkEndian>()?,
-            data: rdr.read_u32::<NetworkEndian>()?,
+        };
+        let payload = match header.rr_type {
+            1 => {
+                let rawaddr = rdr.read_u32::<NetworkEndian>()?;
+                RecordPayload::A(Ipv4Addr::from(rawaddr))
+            },
+            28 => {
+                let mut rawaddr : [u8; 16]= [0; 16];
+                rdr.read_exact(&mut rawaddr)?;
+                RecordPayload::AAAA(Ipv6Addr::from(rawaddr))
+            },
+            _ => {
+                let mut buf = Vec::with_capacity(header.length as usize);
+                rdr.read_exact(&mut buf)?;
+                RecordPayload::Other(buf)
+            },
+        };
+        Ok(Record{
+            header: header, 
+            payload: payload
         })
     }
 }
