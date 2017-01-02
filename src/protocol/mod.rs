@@ -18,7 +18,7 @@ pub struct DnsQuery {
 pub struct DnsResponse {
     header: DnsHeader,
     question: ResponseQuestion,
-    record: Record,
+    record: ResourceRecord
 }
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ struct ResponseQuestion {
 }
 
 #[derive(Debug)]
-struct Record {
+struct ResourceRecord {
     header: RecordHeader,
     payload: RecordPayload,
 }
@@ -81,7 +81,7 @@ impl DnsQuery {
             },
             question: QueryQuestion {
                 name: domain,
-                qtype: 28,
+                qtype: 1,
                 qclass: 1,
             },
         }
@@ -152,7 +152,7 @@ impl DnsResponse {
         println!("Decoded {:?}", question);
 
         let position = rdr.position();
-        let record = Record::parse(&mut rdr, position as u16)?;
+        let record = ResourceRecord::parse(&mut rdr, position as u16)?;
         println!("Decoded {:?}", record);
 
         Ok(DnsResponse {
@@ -175,7 +175,7 @@ impl ResponseQuestion {
     }
 }
 
-impl fmt::Display for Record {
+impl fmt::Display for ResourceRecord {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.payload {
             RecordPayload::A(addr) => addr.fmt(f),
@@ -185,8 +185,8 @@ impl fmt::Display for Record {
     }
 }
 
-impl Record {
-    fn parse<R : Read + Seek + BufRead>(rdr: &mut R, position : u16) -> Result<Record> {
+impl ResourceRecord {
+    fn parse<R : Read + Seek + BufRead>(rdr: &mut R, position : u16) -> Result<ResourceRecord> {
         let header = RecordHeader {
             name: NameRef::parse_reader(rdr, position)?,
             rr_type: rdr.read_u16::<NetworkEndian>()?,
@@ -200,7 +200,7 @@ impl Record {
                 RecordPayload::A(Ipv4Addr::from(rawaddr))
             },
             28 => {
-                let mut rawaddr : [u8; 16]= [0; 16];
+                let mut rawaddr : [u8; 16] = [0; 16];
                 rdr.read_exact(&mut rawaddr)?;
                 RecordPayload::AAAA(Ipv6Addr::from(rawaddr))
             },
@@ -210,9 +210,9 @@ impl Record {
                 RecordPayload::Other(buf)
             },
         };
-        Ok(Record{
+        Ok(ResourceRecord {
             header: header, 
-            payload: payload
+            payload: payload,
         })
     }
 }
