@@ -14,7 +14,7 @@ fn main() {
     let request = DnsQuery::addr_query(hostname);
     request.send_to(&socket, "8.8.8.8:53");
 
-    socket.set_read_timeout(Some(Duration::new(1, 0))).expect("Failed to set socket duration!");
-    let response = DnsResponse::recv_from(&socket);
+    socket.set_read_timeout(Some(Duration::new(5, 0))).expect("Failed to set socket duration!");
+    let response = DnsResponse::recv_from(&socket).unwrap();
 }
 

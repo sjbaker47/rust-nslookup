@@ -11,14 +11,14 @@ use self::name::NameRef;
 #[derive(Debug)]
 pub struct DnsQuery {
     header: DnsHeader,
-    question: QueryQuestion,
+    questions: Vec<QueryQuestion>,
 }
 
 #[derive(Debug)]
 pub struct DnsResponse {
     header: DnsHeader,
-    question: ResponseQuestion,
-    record: ResourceRecord
+    questions: Vec<ResponseQuestion>,
+    records: Vec<ResourceRecord>,
 }
 
 #[derive(Debug)]
@@ -79,26 +79,30 @@ impl DnsQuery {
                 authority_rr_count: 0,
                 additional_rr_count: 0,
             },
-            question: QueryQuestion {
-                name: domain,
-                qtype: 1,
-                qclass: 1,
-            },
+            questions: vec![
+                QueryQuestion {
+                    name: domain,
+                    qtype: 255,
+                    qclass: 1,
+                }, 
+            ],
         }
     }
 
     pub fn send_to<A : ToSocketAddrs>(&self, socket : &UdpSocket, addr : A) {
-        let packet = self.encode_packet();
+        let packet = self.encode_packet().unwrap();
         socket.send_to(&packet, addr).unwrap();
     }
 
-    fn encode_packet(&self) -> Vec<u8> {
+    fn encode_packet(&self) -> Result<Vec<u8>> {
         println!("Encoding packet: {:?}", self);
         let mut buffer = vec![];
-        self.header.encode(&mut buffer).unwrap();
-        self.question.encode(&mut buffer).unwrap();
+        self.header.encode(&mut buffer)?;
+        for question in &self.questions {
+            question.encode(&mut buffer)?;
+        }
         buffer.shrink_to_fit();
-        buffer
+        Ok(buffer)
     }
 }
 
@@ -147,18 +151,28 @@ impl DnsResponse {
         let header = DnsHeader::parse(&mut rdr)?;
         println!("Decoded {:?}", header);
 
-        let position = rdr.position();
-        let question = ResponseQuestion::parse(&mut rdr, position as u16)?;
-        println!("Decoded {:?}", question);
+        let nquestions = header.question_rr_count as usize;
+        let mut questions = Vec::with_capacity(nquestions);
+        for i in 0..nquestions {
+            let position = rdr.position();
+            let question = ResponseQuestion::parse(&mut rdr, position as u16)?;
+            println!("Decoded {:?}", question);
+            questions.push(question);
+        }
 
-        let position = rdr.position();
-        let record = ResourceRecord::parse(&mut rdr, position as u16)?;
-        println!("Decoded {:?}", record);
+        let nanswers = header.answer_rr_count as usize;
+        let mut answers = Vec::with_capacity(nanswers);
+        for i in 0..nanswers {
+            let position = rdr.position();
+            let record = ResourceRecord::parse(&mut rdr, position as u16)?;
+            println!("Decoded {:?}", record);
+            answers.push(record);
+        }
 
         Ok(DnsResponse {
             header: header,
-            question: question,
-            record: record
+            questions: questions,
+            records: answers,
         })
     }
 }
@@ -205,8 +219,9 @@ impl ResourceRecord {
                 RecordPayload::AAAA(Ipv6Addr::from(rawaddr))
             },
             _ => {
-                let mut buf = Vec::with_capacity(header.length as usize);
-                rdr.read_exact(&mut buf)?;
+                let len = header.length as usize;
+                let mut buf = vec![0u8; len];
+                rdr.read_exact(buf.as_mut_slice())?;
                 RecordPayload::Other(buf)
             },
         };
