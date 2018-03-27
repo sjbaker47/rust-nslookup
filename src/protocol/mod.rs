@@ -68,7 +68,7 @@ enum RecordPayload {
 }
 
 impl DnsQuery {
-    pub fn addr_query(domain : String) -> DnsQuery {
+    pub fn addr_query(domain: String) -> DnsQuery {
         DnsQuery { 
             header: DnsHeader {
                 transaction_id: rand::random::<u16>(),
@@ -141,6 +141,7 @@ impl QueryQuestion {
 
 impl DnsResponse {
     pub fn recv_from(socket: &UdpSocket) -> Result<DnsResponse> {
+        //XXX: Servers can respond with more than 512 bytes
         let mut recvbuf = [0; 512];
         let (nbytes, _) = socket.recv_from(&mut recvbuf[..])?;
         DnsResponse::decode_packet(&recvbuf[..nbytes])

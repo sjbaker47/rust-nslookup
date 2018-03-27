@@ -11,15 +11,20 @@ pub enum NameRef {
 }
 
 impl NameRef {
+
+    //Return a Result of NameRef, and advance the stream by whatever number of bytes required to
+    //read the name
     pub fn parse_reader<R : Read + Seek + BufRead>(reader : &mut R, position: u16) -> Result<NameRef> {
         let flag = reader.read_u16::<NetworkEndian>()?;
+        //Offset starts with the two high bits set. If they aren't, it's a name reference...
         let offset_flag = 0xc000u16;
         if (flag & offset_flag) == offset_flag {
+            //Extract the six-bit offset to somewhere else in the UDP packet
             let offset_reference = flag & !(offset_flag);
             Ok(NameRef::Offset(offset_reference))
         }
         else {
-            //Undo the two bytes we've read -- they're a part of the domain name!
+            //Undo the two bytes we've read -- they're a part of the domain name
             reader.seek(SeekFrom::Current(-2))?;
             let name = NameRef::Name(decode_name_rdr(reader)?, position);
             Ok(name)
@@ -31,7 +36,7 @@ impl NameRef {
 //The domain 'microsoft.com' becomes "0x09microsoft0x03com0x00"
 pub fn encode_name(name : &str) -> Vec<u8> {
     let parts: Vec<&str> = name.split('.').collect();
-    //Need one byte for size of each part, n bytes for the text, and a null byte
+    //Need one byte for size of each part, n bytes for the text, and a null byte`
     let mut buffer : Vec<u8> = Vec::new();
     for part in parts {
         //Write the size byte first
@@ -48,6 +53,7 @@ pub fn encode_name(name : &str) -> Vec<u8> {
 
 pub fn decode_name_rdr<R : BufRead>(rdr: &mut R) -> Result<String> {
     let mut buffer: Vec<u8> = Vec::new();
+    //Read until the null byte (?)
     let total = rdr.read_until(0, &mut buffer)?;
     if total == 0 || buffer[total-1] != 0 {
         return Err(Error::new(ErrorKind::InvalidData, "Domain name appears blank or mangled"));
