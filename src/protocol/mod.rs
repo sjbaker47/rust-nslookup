@@ -18,7 +18,7 @@ pub struct DnsQuery {
 pub struct DnsResponse {
     header: DnsHeader,
     questions: Vec<ResponseQuestion>,
-    records: Vec<ResourceRecord>,
+    pub records: Vec<ResourceRecord>,
 }
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ struct ResponseQuestion {
 }
 
 #[derive(Debug)]
-struct ResourceRecord {
+pub struct ResourceRecord {
     header: RecordHeader,
     payload: RecordPayload,
 }

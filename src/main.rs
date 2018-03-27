@@ -19,13 +19,17 @@ fn main() {
 }
 
 fn run(hostname : String) -> Result<DnsResponse, Box<Error>> {
-    let socket = UdpSocket::bind("0.0.0.0:1").unwrap();
+    let socket = UdpSocket::bind("0.0.0.0:0").unwrap();
     let request = DnsQuery::addr_query(hostname);
 
     //XXX: Custom DNS server, get default from host?
     request.send_to(&socket, "8.8.8.8:53");
 
     socket.set_read_timeout(Some(Duration::new(5, 0)))?;
-    Ok(DnsResponse::recv_from(&socket)?)
+    let response = DnsResponse::recv_from(&socket)?;
+    for record in &response.records {
+        println!("{}", record);
+    }
+    Ok(response)
 }
 
